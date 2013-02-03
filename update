@@ -1,0 +1,96 @@
+#!/bin/sh
+function svnci () {
+local day=$(date +%Y%m%d)
+local cmsg="$commit_msg @$day"
+echo "Commit Msg: $cmsg"
+
+# --- update repo
+#svn update
+
+cd trunk
+
+# --- clean up a bit
+# remove temp files
+svn rm *.tmp
+svn rm * --keep-local
+
+# -- ignore .git folder
+svn propset svn:ignore .git .
+svn add *
+
+# --- svn commit
+svn ci --non-interactive -q -m "$cmsg"
+
+# --- svn tagging
+local info=$(svn info)
+local svnurl=$(echo $info | sed 's/.*Repository Root: \([^ ]*\).*/\1/')
+svn copy $svnurl/trunk $svnurl/tags/$tag -m "$cmsg"
+}
+
+function gitco () {
+### be sure to push the commit of branch 'master' first. it will be pulled later
+
+# --- setup
+local gitdir=$PWD/trunk/.git
+local worktree=$PWD/trunk/
+local pathtobare=$PWD
+
+# --- check if trunk folder exists
+if [ ! -d $worktree ]; then
+	echo "Working directory $worktree not found. Aborting!"
+	exit 1
+fi
+
+# --- check if the git repo was initialized
+if [ ! -d $gitdir ]; then
+	git --git-dir=$gitdir --work-tree=$worktree init
+	git --git-dir=$gitdir --work-tree=$worktree add .
+	git --git-dir=$gitdir --work-tree=$worktree commit -m "initial commit after automatic creation of repo"
+fi
+
+# fetch branches
+branches=$(git --git-dir=$gitdir --work-tree=$worktree remote)
+
+# pull if branch svn-master exists, else create it first and pull then
+case $branches in
+	*svn-master* )
+	echo 'Found svn-master'
+	git --git-dir=$gitdir --work-tree=$worktree pull svn-master master
+	;;
+	* )
+	echo 'Create svn-master'
+	git --git-dir=$gitdir --work-tree=$worktree remote add svn-master $pathtobare
+	git --git-dir=$gitdir --work-tree=$worktree pull svn-master master
+	;;
+esac
+}
+
+# --- Command line
+refname="$1"
+oldrev="$2"
+newrev="$3"
+
+# --- setup
+newrev_type=$(git cat-file -t $newrev)
+tag=${refname##refs/tags/}
+
+# --- switch annotated and un-annotated tags
+case "$refname","$newrev_type" in
+	refs/tags/*,commit)
+		# un-annotated tag
+		mkdir $GIT_DIR/tags/$tag -p -m 0777
+		commit_msg="Version $tag released"
+		gitco
+		svnci
+		;;
+	refs/tags/*,tag)
+		# annotated tag
+		mkdir $GIT_DIR/tags/$tag -p -m 0777
+		commit_msg="Version $tag released"
+		gitco
+		svnci
+### fetch commit message for svn commit
+		;;
+esac
+
+exit 0
